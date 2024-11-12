@@ -54,7 +54,7 @@ class GoInterface(Node):
 
         if not service_url.get_parameter_value().string_value \
                 or not access_token.get_parameter_value().string_value:
-            logger.info("[go_interface] Parameters not found.")
+            logger.error("[go_interface] Parameters not found.")
             return
 
         self._is_emergency = False
@@ -95,8 +95,6 @@ class GoInterface(Node):
 
     def on_change_lock_flg(self, change_lock_flg):
         logger = self.get_logger()
-        # info log
-        logger.info("[go_interface] on_change_lock_flg.")
         # Check if vehicle id has been updated
         if not self._vehicle_id:
             return
@@ -149,7 +147,6 @@ class GoInterface(Node):
 
     def on_vehicle_info(self, vehicle_info):
         logger = self.get_logger()
-        logger.info("[go_interface] on_vehicle_info.")
         # Parse data into json format
         json_str = json.loads(vehicle_info.data)
         # Get vehicle_id
@@ -179,18 +176,16 @@ class GoInterface(Node):
 
     def output_timer(self):
         logger = self.get_logger()
-        logger.info("[go_interface] output_timer.")
         if (self._is_emergency):
-            logger.info("[go_interface] is_emergency.")
+            logger.error("[go_interface] is_emergency.")
             return
         if (self._vehicle_id==""):
-            logger.info("[go_interface] _vehicle_id is unset.")
+            logger.error("[go_interface] _vehicle_id is unset.")
             return
         self.get_vehicle_status()
 
     def get_vehicle_status(self):
         logger = self.get_logger()
-        logger.info("[go_interface] get_vehicle_status.")
 
         # Get vehicle-status from server via REST API
         url = "{0}/api/vehicle_status?vehicle_id={1}".format(
