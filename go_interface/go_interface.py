@@ -159,21 +159,6 @@ class GoInterface(Node):
         self._vehicle_id = vehicle_id
         self._is_emergency = False
 
-    def retry_session(self, retries, session=None, backoff_factor=0.3):
-        session = session or requests.Session()
-        retry = Retry(
-            total=retries,
-            read=retries,
-            connect=retries,
-            backoff_factor=backoff_factor,
-            method_whitelist=False,
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        session.mount('http://', adapter)
-        session.mount('https://', adapter)
-        return session
-
-
     def output_timer(self):
         logger = self.get_logger()
         if (self._is_emergency):
@@ -249,6 +234,21 @@ class GoInterface(Node):
         vehicle_status.voice_flg = self._voice_flg
         vehicle_status.active_schedule_exists = self._active_schedule_exists
         self._vehicle_status_publisher.publish(vehicle_status)
+
+    def retry_session(self, retries, session=None, backoff_factor=0.3):
+        session = session or requests.Session()
+        retry = Retry(
+            total=retries,
+            read=retries,
+            connect=retries,
+            backoff_factor=backoff_factor,
+            method_whitelist=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        return session
+
 
 def main(args=None):
     rclpy.init(args=args)
