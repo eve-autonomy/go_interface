@@ -47,6 +47,8 @@ class GoInterface(Node):
         super().__init__("go_interface")
         logger = self.get_logger()
 
+        timer_period = 3.0
+
         service_url = self.declare_parameter("delivery_reservation_service_url")
         access_token = self.declare_parameter("access_token")
 
@@ -54,6 +56,8 @@ class GoInterface(Node):
                 or not access_token.get_parameter_value().string_value:
             logger.info("[go_interface] Parameters not found.")
             return
+
+        self._is_emergency = False
 
         self._service_url = service_url.get_parameter_value().string_value
         self._access_token = access_token.get_parameter_value().string_value
@@ -84,10 +88,15 @@ class GoInterface(Node):
         self._vehicle_status_publisher = self.create_publisher(
             VehicleStatus, "api_vehicle_status", profile)
 
+        # timer
+        self._timer = self.create_timer(timer_period, self.output_timer)
+
         logger.info("[go_interface] init.")
 
     def on_change_lock_flg(self, change_lock_flg):
         logger = self.get_logger()
+        # info log
+        logger.info("[go_interface] on_change_lock_flg.")
         # Check if vehicle id has been updated
         if not self._vehicle_id:
             return
@@ -129,18 +138,59 @@ class GoInterface(Node):
             logger.error(
                 "[go_interface] Response data does not match the owned data.")
             return
+        
+        if response_data.get(STR_RESULT).get(STR_LOCK_FLG) is None:
+            logger.error(
+                "[go_interface] Failed to parse lock_flg retrieved from server.")
+            return
+        
+        self.get_vehicle_status()
+
 
     def on_vehicle_info(self, vehicle_info):
         logger = self.get_logger()
+        logger.info("[go_interface] on_vehicle_info.")
         # Parse data into json format
         json_str = json.loads(vehicle_info.data)
         # Get vehicle_id
         vehicle_id = json_str.get(STR_VEHICLE_ID)
         if vehicle_id is None:
+            self._is_emergency = True
             logger.error(
                 "[go_interface] Vehicle ID could not be obtained from FMS.")
             return
         self._vehicle_id = vehicle_id
+        self._is_emergency = False
+
+    def retry_session(self, retries, session=None, backoff_factor=0.3):
+        session = session or requests.Session()
+        retry = Retry(
+            total=retries,
+            read=retries,
+            connect=retries,
+            backoff_factor=backoff_factor,
+            method_whitelist=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        return session
+
+
+    def output_timer(self):
+        logger = self.get_logger()
+        logger.info("[go_interface] output_timer.")
+        if (self._is_emergency):
+            logger.info("[go_interface] is_emergency.")
+            return
+        if (self._vehicle_id==""):
+            logger.info("[go_interface] _vehicle_id is unset.")
+            return
+        self.get_vehicle_status()
+
+    def get_vehicle_status(self):
+        logger = self.get_logger()
+        logger.info("[go_interface] get_vehicle_status.")
 
         # Get vehicle-status from server via REST API
         url = "{0}/api/vehicle_status?vehicle_id={1}".format(
@@ -204,21 +254,6 @@ class GoInterface(Node):
         vehicle_status.voice_flg = self._voice_flg
         vehicle_status.active_schedule_exists = self._active_schedule_exists
         self._vehicle_status_publisher.publish(vehicle_status)
-
-    def retry_session(self, retries, session=None, backoff_factor=0.3):
-        session = session or requests.Session()
-        retry = Retry(
-            total=retries,
-            read=retries,
-            connect=retries,
-            backoff_factor=backoff_factor,
-            method_whitelist=False,
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        session.mount('http://', adapter)
-        session.mount('https://', adapter)
-        return session
-
 
 def main(args=None):
     rclpy.init(args=args)
