@@ -16,12 +16,14 @@ Following use-cases are realized by connecting with FMS (fleet management servic
   - from [autoware_state_machine](https://github.com/eve-autonomy/autoware_state_machine/) 
     - `/req_change_lock_flg` \[[go_interface_msgs/msg/ChangeLockFlg](https://github.com/eve-autonomy/go_interface_msgs/blob/main/msg/ChangeLockFlg.msg)\]:<br>Receives reservations for on-demand delivery.
   - from [on-demand delivery apps (user-defined)](#required-specifications-for-on-demand-delivery-apps)
-    - [`GET API`](#get-api--get-current-reservation-status):<br>Gets the current reservation status for on-demand delivery in the ego vehicle.
+    - [`GET API`](#get-api--get-current-reservation-status):<br>Gets the current reservation status for on-demand delivery in the ego vehicle in two cases.
+      - Every 3 seconds
+      - After successful PATCH requests
 - output
   - to [autoware_state_machine](https://github.com/eve-autonomy/autoware_state_machine/)
     - `/api_vehicle_status` \[[go_interface_msgs/msg/VehicleStatus](https://github.com/eve-autonomy/go_interface_msgs/blob/main/msg/VehicleStatus.msg)\]:<br>The current reservation status for on-demand delivery in the ego vehicle.
   - to [on-demand delivery apps (user-defined)](#required-specifications-for-on-demand-delivery-apps)
-    - [`PATCH API`](#patch-api--update-reservation-status):<br>Updates the reservation status for on-demand delivery in the ego vehicle.
+    - [`PATCH API`](#patch-api--update-reservation-status):<br>Updates the reservation status for on-demand delivery in the ego vehicle. A PATCH request is sent when the vehicle reservation state is changes.
 
 ## Node Graph
 ![node graph](http://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/eve-autonomy/go_interface/main/docs/node_graph.pu)
