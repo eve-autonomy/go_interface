@@ -142,7 +142,7 @@ class GoInterface(Node):
                 "[go_interface] Failed to parse lock_flg retrieved from server.")
             return
         
-        self.get_vehicle_status()
+        self.fetch_from_ondemand_delivery_apps()
 
 
     def on_vehicle_info(self, vehicle_info):
@@ -167,9 +167,9 @@ class GoInterface(Node):
         if (self._vehicle_id==""):
             logger.error("[go_interface] _vehicle_id is unset.")
             return
-        self.get_vehicle_status()
+        self.fetch_from_ondemand_delivery_apps()
 
-    def get_vehicle_status(self):
+    def fetch_from_ondemand_delivery_apps(self):
         logger = self.get_logger()
 
         # Get vehicle-status from server via REST API
