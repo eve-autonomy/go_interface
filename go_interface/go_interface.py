@@ -17,10 +17,13 @@
 
 import json
 
-from go_interface_msgs.msg import ChangeLockFlg, VehicleStatus
+from go_interface_msgs.msg import VehicleStatus
+from autoware_state_machine_msgs.msg import VehicleButton
+from autoware_state_machine_msgs.msg import StateLock
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
+from rclpy.duration import Duration
 import requests
 from requests.adapters import HTTPAdapter
 from std_msgs.msg import String
@@ -40,8 +43,6 @@ GET_READ_TIMEOUT = 1.0
 PATCH_CONNECT_TIMEOUT = 1.0
 PATCH_READ_TIMEOUT = 2.0
 PATCH_MAX_RETRY = 5
-
-
 class GoInterface(Node):
     def __init__(self):
         super().__init__("go_interface")
@@ -77,14 +78,19 @@ class GoInterface(Node):
             "Content-Type": "application/json",
             "Authorization": "Token {}".format(self._access_token)
         }
+        self._current_delivery_reservation_state = StateLock.STATE_OFF
+        self._delivery_reservation_verification_overtime = 15.0
+        self._delivery_reservation_verification_time = self.get_clock().now()
 
         # QoS Setting
         depth = 1
         profile = QoSProfile(depth=depth)
         self._vehicle_info_subcriber = self.create_subscription(
             String, "/webauto/vehicle_info", self.on_vehicle_info, profile)
-        self._change_lock_flg_subscriber = self.create_subscription(
-            ChangeLockFlg, "req_change_lock_flg", self.on_change_lock_flg, profile)
+        self._delivery_reservation_button_subcriber = self.create_subscription(
+            VehicleButton, "/delivery_reservation_button", self.on_delivery_reservation_button, profile)
+        self._lock_state_publisher = self.create_publisher(
+            StateLock, "/go_interface/lock_state", profile)
         self._vehicle_status_publisher = self.create_publisher(
             VehicleStatus, "api_vehicle_status", profile)
 
@@ -99,13 +105,11 @@ class GoInterface(Node):
         if not self._vehicle_id:
             return
 
-        lock_flg = change_lock_flg.flg
-
         # Patch lock-flg from server via REST API
         url = "{}/api/vehicle_status".format(self._service_url)
         payload = {
             STR_VEHICLE_ID: self._vehicle_id,
-            STR_LOCK_FLG: int(lock_flg)}
+            STR_LOCK_FLG: int(change_lock_flg)}
 
         try:
             session = self.retry_session(retries=self._patch_max_retry)
@@ -144,7 +148,6 @@ class GoInterface(Node):
         
         self.fetch_from_ondemand_delivery_apps()
 
-
     def on_vehicle_info(self, vehicle_info):
         logger = self.get_logger()
         # Parse data into json format
@@ -159,6 +162,32 @@ class GoInterface(Node):
         self._vehicle_id = vehicle_id
         self._is_emergency = False
 
+    def on_delivery_reservation_button(self, delivery_reservation_info):
+        logger = self.get_logger()
+        if (self._active_schedule_exists):
+            logger.error(
+                "[go_interface] Active schedule exists.")
+            return
+        if (self._current_delivery_reservation_state == StateLock.STATE_VERIFICATION):
+            logger.error(
+                "[go_interface] Under Verification.")
+            return
+
+        change_lock = False
+        if (self._current_delivery_reservation_state == StateLock.STATE_OFF):
+            # Set the LED to blinking.
+            self._delivery_reservation_verification_time = self.get_clock().now()
+            self._current_delivery_reservation_state = StateLock.STATE_VERIFICATION
+            change_lock = True
+            lock_state = StateLock()
+            lock_state.stamp = self.get_clock().now().to_msg()
+            lock_state.state = self._current_delivery_reservation_state
+            self._lock_state_publisher.publish(lock_state)
+        else:
+            change_lock = False
+
+        self.on_change_lock_flg(change_lock)
+
     def output_timer(self):
         logger = self.get_logger()
         if (self._is_emergency):
@@ -168,6 +197,7 @@ class GoInterface(Node):
             logger.error("[go_interface] _vehicle_id is unset.")
             return
         self.fetch_from_ondemand_delivery_apps()
+        self.lock_state_verification_timeout()
 
     def fetch_from_ondemand_delivery_apps(self):
         logger = self.get_logger()
@@ -227,13 +257,40 @@ class GoInterface(Node):
                 "[go_interface] \
                 Failed to parse active_schedule_exists retrieved from server.")
 
-        # Publish vehicle-status to autoware-state-machine
+        # Publish vehicle-status to eve node
         vehicle_status = VehicleStatus()
         vehicle_status.stamp = self.get_clock().now().to_msg()
         vehicle_status.lock_flg = self._lock_flg
         vehicle_status.voice_flg = self._voice_flg
         vehicle_status.active_schedule_exists = self._active_schedule_exists
         self._vehicle_status_publisher.publish(vehicle_status)
+
+        # lock state off or lock state verification
+        if ((self._current_delivery_reservation_state == StateLock.STATE_OFF)
+            or (self._current_delivery_reservation_state == StateLock.STATE_VERIFICATION)):
+            if (self._lock_flg == True):
+                self._current_delivery_reservation_state = StateLock.STATE_ON
+                change_lock_state = True
+        else:
+            if (self._lock_flg == False):
+                self._current_delivery_reservation_state = StateLock.STATE_OFF
+                change_lock_state = True
+
+        if (change_lock_state):
+            state_lock = StateLock()
+            state_lock.stamp = self.get_clock().now().to_msg()
+            state_lock.state = self._current_delivery_reservation_state
+            self._lock_state_publisher.publish(state_lock)
+
+    def lock_state_verification_timeout(self):
+        current_time = self.get_clock().now()
+        if (self._current_delivery_reservation_state == StateLock.STATE_VERIFICATION):
+            if ((current_time - self._delivery_reservation_verification_time) > Duration(seconds=self._delivery_reservation_verification_overtime)):
+                self._current_delivery_reservation_state = StateLock.STATE_OFF
+                state_lock = StateLock()
+                state_lock.stamp = self.get_clock().now().to_msg()
+                state_lock.state = self._current_delivery_reservation_state
+                self._lock_state_publisher.publish(state_lock)
 
     def retry_session(self, retries, session=None, backoff_factor=0.3):
         session = session or requests.Session()
