@@ -38,7 +38,7 @@ source /path/to/your/workspace/install/setup.bash
 ### 全テスト実行
 
 ```bash
-cd /home/satoshiinoue/ws/pilot-auto/pilot-auto.x1.eve/src/x1/v2x_connection/go_interface
+cd {work_space_dir}/src/x1/v2x_connection/go_interface
 pytest test/test_go_interface.py -v
 ```
 
@@ -137,11 +137,6 @@ pytest test/test_go_interface.py -v -s --log-cli-level=INFO
 | `test_off_to_on_via_verification` | 状態遷移: OFF → VERIFICATION → ON |
 | `test_on_to_off` | 状態遷移: ON → OFF |
 
-## テスト設計の詳細
-
-詳細なテスト設計については、以下のドキュメントを参照してください：
-
-- [go_interface_detailed_callbacks_and_tests.md](/home/satoshiinoue/ws/pilot-auto/pilot-auto.x1.eve/docs/go_interface_detailed_callbacks_and_tests.md)
 
 ## Mock クラスの使用方法
 
@@ -188,7 +183,7 @@ with patch('requests.get', side_effect=fake_server.get_vehicle_status):
 `PYTHONPATH` を設定してください：
 
 ```bash
-export PYTHONPATH=$PYTHONPATH:/home/satoshiinoue/ws/pilot-auto/pilot-auto.x1.eve/src/x1/v2x_connection/go_interface
+export PYTHONPATH=$PYTHONPATH:${work-space-dir}/src/x1/v2x_connection/go_interface
 pytest test/test_go_interface.py -v
 ```
 
@@ -197,7 +192,7 @@ pytest test/test_go_interface.py -v
 ROS 2 ワークスペースをビルドして、setup.bash をソースしてください：
 
 ```bash
-cd /home/satoshiinoue/ws/pilot-auto/pilot-auto.x1.eve
+cd ${work-space-dir}
 colcon build --packages-select go_interface_msgs autoware_state_machine_msgs
 source install/setup.bash
 ```
