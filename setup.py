@@ -44,6 +44,7 @@ setup(
     entry_points={
         'console_scripts': [
             'go_interface = ' + package_name + '.go_interface:main',
+            'integration_test.py = test.integration_test:main',
         ],
     },
 )

@@ -17,7 +17,8 @@
 
 import json
 
-from go_interface_msgs.msg import ChangeLockFlg, VehicleStatus
+from go_interface_msgs.msg import VehicleStatus
+from autoware_state_machine_msgs.msg import VehicleButton, StateLock
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
@@ -48,6 +49,18 @@ class GoInterface(Node):
         logger = self.get_logger()
 
         timer_period = 3.0
+        
+        # 基本フィールドの初期化（パラメータエラー時も必要）
+        self._is_emergency = False
+        self._vehicle_id = ""
+        self._lock_flg = False
+        self._voice_flg = False
+        self._active_schedule_exists = False
+        
+        # 配送予約状態管理（NEW）
+        self._current_lock_state = StateLock.STATE_OFF
+        self._verification_start_time = None
+        self._verification_timeout = 15.0  # 15秒
 
         service_url = self.declare_parameter("delivery_reservation_service_url")
         access_token = self.declare_parameter("access_token")
@@ -57,8 +70,6 @@ class GoInterface(Node):
             logger.error("[go_interface] Parameters not found.")
             return
 
-        self._is_emergency = False
-
         self._service_url = service_url.get_parameter_value().string_value
         self._access_token = access_token.get_parameter_value().string_value
 
@@ -67,11 +78,7 @@ class GoInterface(Node):
         self._patch_connect_timeout = PATCH_CONNECT_TIMEOUT
         self._patch_read_timeout = PATCH_READ_TIMEOUT
         self._patch_max_retry = PATCH_MAX_RETRY
-
-        self._vehicle_id = ""
-        self._lock_flg = False
-        self._voice_flg = False
-        self._active_schedule_exists = False
+        
         self._headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -83,30 +90,57 @@ class GoInterface(Node):
         profile = QoSProfile(depth=depth)
         self._vehicle_info_subcriber = self.create_subscription(
             String, "/webauto/vehicle_info", self.on_vehicle_info, profile)
-        self._change_lock_flg_subscriber = self.create_subscription(
-            ChangeLockFlg, "req_change_lock_flg", self.on_change_lock_flg, profile)
+        self._delivery_reservation_button_subscriber = self.create_subscription(
+            VehicleButton, "/delivery_reservation_button", 
+            self.on_delivery_reservation_button, profile)
         self._vehicle_status_publisher = self.create_publisher(
             VehicleStatus, "api_vehicle_status", profile)
+        self._lock_state_publisher = self.create_publisher(
+            StateLock, "/go_interface/lock_state", profile)
 
         # timer
         self._timer = self.create_timer(timer_period, self.output_timer)
 
         logger.info("[go_interface] init.")
 
-    def on_change_lock_flg(self, change_lock_flg):
+    def on_delivery_reservation_button(self, msg):
+        """配送予約ボタン押下時の処理"""
         logger = self.get_logger()
-        # Check if vehicle id has been updated
-        if not self._vehicle_id:
+        
+        # 前提条件チェック: アクティブスケジュール
+        if self._active_schedule_exists:
+            logger.warn(
+                "[go_interface] Active schedule exists. Button press ignored.")
             return
+        
+        # 前提条件チェック: 検証中
+        if self._current_lock_state == StateLock.STATE_VERIFICATION:
+            logger.warn(
+                "[go_interface] Under verification. Button press ignored.")
+            return
+        
+        # 状態による処理分岐
+        if self._current_lock_state == StateLock.STATE_OFF:
+            # パターン1: 配送予約ON
+            self._handle_reservation_on()
+        elif self._current_lock_state == StateLock.STATE_ON:
+            # パターン2: 配送予約OFF
+            self._handle_reservation_off()
+        else:
+            logger.error(
+                f"[go_interface] Unexpected lock_state: {self._current_lock_state}")
 
-        lock_flg = change_lock_flg.flg
-
-        # Patch lock-flg from server via REST API
+    def _handle_reservation_on(self):
+        """配送予約ON処理"""
+        logger = self.get_logger()
+        
+        # PATCH lock_flg=1 to Web server
         url = "{}/api/vehicle_status".format(self._service_url)
         payload = {
             STR_VEHICLE_ID: self._vehicle_id,
-            STR_LOCK_FLG: int(lock_flg)}
-
+            STR_LOCK_FLG: 1
+        }
+        
         try:
             session = self.retry_session(retries=self._patch_max_retry)
             res = session.patch(
@@ -121,34 +155,101 @@ class GoInterface(Node):
             logger.error(
                 "[go_interface] Unable to communicate with the server. {}".format(e))
             return
-
+        
         if res.status_code != API_OK_CODE:
             logger.error(
                 "[go_interface] Server returned an error code : {}.".format(
                     res.status_code))
             return
+        
+        # STATE_VERIFICATION に遷移
+        self._current_lock_state = StateLock.STATE_VERIFICATION
+        self._verification_start_time = self.get_clock().now()
+        self._publish_lock_state()
+        logger.info("[go_interface] Reservation ON requested. STATE_VERIFICATION.")
 
-        response_data = res.json()
-
-        # Comparing response data with the owned data
-        if (self._vehicle_id !=
-                response_data.get(STR_RESULT).get(STR_VEHICLE_ID)):
+    def _handle_reservation_off(self):
+        """配送予約OFF処理"""
+        logger = self.get_logger()
+        
+        # PATCH lock_flg=0 to Web server
+        url = "{}/api/vehicle_status".format(self._service_url)
+        payload = {
+            STR_VEHICLE_ID: self._vehicle_id,
+            STR_LOCK_FLG: 0
+        }
+        
+        try:
+            session = self.retry_session(retries=self._patch_max_retry)
+            res = session.patch(
+                url,
+                headers=self._headers,
+                data=json.dumps(payload),
+                timeout=(
+                    self._patch_connect_timeout,
+                    self._patch_read_timeout))
+            res.raise_for_status()
+        except requests.exceptions.RequestException as e:
             logger.error(
-                "[go_interface] Response data does not match the owned data.")
+                "[go_interface] Unable to communicate with the server. {}".format(e))
             return
         
-        if response_data.get(STR_RESULT).get(STR_LOCK_FLG) is None:
+        if res.status_code != API_OK_CODE:
             logger.error(
-                "[go_interface] Failed to parse lock_flg retrieved from server.")
+                "[go_interface] Server returned an error code : {}.".format(
+                    res.status_code))
             return
         
-        self.fetch_from_ondemand_delivery_apps()
+        logger.info("[go_interface] Reservation OFF requested. Waiting for Web response.")
 
+    def _check_verification_timeout(self):
+        """検証タイムアウトのチェック"""
+        logger = self.get_logger()
+        
+        # 状態チェック
+        if self._current_lock_state != StateLock.STATE_VERIFICATION:
+            return
+        
+        # verification_start_time チェック
+        if self._verification_start_time is None:
+            return
+        
+        # 経過時間計算
+        current_time = self.get_clock().now()
+        elapsed_ns = (current_time.nanoseconds - 
+                      self._verification_start_time.nanoseconds)
+        elapsed_sec = elapsed_ns / 1e9
+        
+        # タイムアウト判定
+        if elapsed_sec > self._verification_timeout:
+            logger.warn(
+                f"[go_interface] Verification timeout ({self._verification_timeout}s). "
+                "Resetting to STATE_OFF.")
+            
+            # STATE_OFF に遷移
+            self._current_lock_state = StateLock.STATE_OFF
+            self._verification_start_time = None
+            
+            # lock_state を Publish
+            self._publish_lock_state()
+
+    def _publish_lock_state(self):
+        """lock_state を Publish"""
+        lock_state_msg = StateLock()
+        lock_state_msg.stamp = self.get_clock().now().to_msg()
+        lock_state_msg.state = self._current_lock_state
+        self._lock_state_publisher.publish(lock_state_msg)
 
     def on_vehicle_info(self, vehicle_info):
         logger = self.get_logger()
         # Parse data into json format
-        json_str = json.loads(vehicle_info.data)
+        try:
+            json_str = json.loads(vehicle_info.data)
+        except json.JSONDecodeError as e:
+            self._is_emergency = True
+            logger.error(f"[go_interface] Failed to parse vehicle_info: {e}")
+            return
+        
         # Get vehicle_id
         vehicle_id = json_str.get(STR_VEHICLE_ID)
         if vehicle_id is None:
@@ -168,6 +269,7 @@ class GoInterface(Node):
             logger.error("[go_interface] _vehicle_id is unset.")
             return
         self.fetch_from_ondemand_delivery_apps()
+        self._check_verification_timeout()
 
     def fetch_from_ondemand_delivery_apps(self):
         logger = self.get_logger()
@@ -206,7 +308,35 @@ class GoInterface(Node):
         # Check vehicle status of response data
         lock_flg_int = response_data.get(STR_RESULT).get(STR_LOCK_FLG)
         if lock_flg_int is not None:
-            self._lock_flg = (lock_flg_int != 0)
+            new_lock_flg = (lock_flg_int != 0)
+            
+            # 状態遷移判定
+            if self._current_lock_state == StateLock.STATE_OFF:
+                if new_lock_flg:
+                    # OFF → ON（外部からの予約）
+                    logger.warn(
+                        "[go_interface] lock_flg changed to true externally.")
+                    self._current_lock_state = StateLock.STATE_ON
+                    self._publish_lock_state()
+            
+            elif self._current_lock_state == StateLock.STATE_VERIFICATION:
+                if new_lock_flg:
+                    # VERIFICATION → ON（Web確認完了）
+                    logger.info(
+                        "[go_interface] Verification complete. STATE_ON.")
+                    self._current_lock_state = StateLock.STATE_ON
+                    self._verification_start_time = None
+                    self._publish_lock_state()
+            
+            elif self._current_lock_state == StateLock.STATE_ON:
+                if not new_lock_flg:
+                    # ON → OFF（予約解除完了）
+                    logger.info(
+                        "[go_interface] Reservation cancelled. STATE_OFF.")
+                    self._current_lock_state = StateLock.STATE_OFF
+                    self._publish_lock_state()
+            
+            self._lock_flg = new_lock_flg
         else:
             logger.error(
                 "[go_interface] Failed to parse lock_flg retrieved from server.")
