@@ -21,7 +21,7 @@ from go_interface_msgs.msg import VehicleStatus
 from autoware_state_machine_msgs.msg import VehicleButton, StateLock
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile
+from rclpy.qos import QoSProfile, DurabilityPolicy
 import requests
 from requests.adapters import HTTPAdapter
 from std_msgs.msg import String
@@ -88,15 +88,16 @@ class GoInterface(Node):
         # QoS Setting
         depth = 1
         profile = QoSProfile(depth=depth)
+        transient_local_profile = QoSProfile(depth=depth, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._vehicle_info_subcriber = self.create_subscription(
             String, "/webauto/vehicle_info", self.on_vehicle_info, profile)
         self._delivery_reservation_button_subscriber = self.create_subscription(
-            VehicleButton, "/delivery_reservation_button", 
-            self.on_delivery_reservation_button, profile)
+            VehicleButton, "/delivery_reservation_button",
+            self.on_delivery_reservation_button, transient_local_profile)
         self._vehicle_status_publisher = self.create_publisher(
-            VehicleStatus, "api_vehicle_status", profile)
+            VehicleStatus, "api_vehicle_status", transient_local_profile)
         self._lock_state_publisher = self.create_publisher(
-            StateLock, "/go_interface/lock_state", profile)
+            StateLock, "/go_interface/lock_state", transient_local_profile)
 
         # timer
         self._timer = self.create_timer(timer_period, self.output_timer)
